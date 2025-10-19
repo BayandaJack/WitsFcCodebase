@@ -210,16 +210,15 @@ class Agent(Base_Agent):
 
 
 
-    def select_skill(self,strategyData):
+    def select_skill(self, strategyData):
         #--------------------------------------- 2. Decide action
         drawer = self.world.draw
-        path_draw_options = self.path_manager.draw_options
-
+        # path_draw_options = self.path_manager.draw_options
 
         #------------------------------------------------------
-        #Role Assignment
-        if strategyData.active_player_unum == strategyData.robot_model.unum: # I am the active player 
-            drawer.annotation((0,10.5), "Role Assignment Phase" , drawer.Color.yellow, "status")
+        # Role Assignment Phase
+        if strategyData.active_player_unum == strategyData.robot_model.unum:  # I am the active player 
+            drawer.annotation((0,10.5), "Role Assignment Phase", drawer.Color.yellow, "status")
         else:
             drawer.clear("status")
 
@@ -228,48 +227,52 @@ class Agent(Base_Agent):
         strategyData.my_desired_position = point_preferences[strategyData.player_unum]
         strategyData.my_desried_orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(strategyData.my_desired_position)
 
-        drawer.line(strategyData.mypos, strategyData.my_desired_position, 2,drawer.Color.blue,"target line")
+        drawer.line(strategyData.mypos, strategyData.my_desired_position, 2, drawer.Color.blue, "target line")
 
+        # If formation not yet ready, keep moving into position
         if not strategyData.IsFormationReady(point_preferences):
             return self.move(strategyData.my_desired_position, orientation=strategyData.my_desried_orientation)
-        #else:
-        #     return self.move(strategyData.my_desired_position, orientation=strategyData.ball_dir)
 
-
-    
         #------------------------------------------------------
-        # Example Behaviour
-        target = (15,0) # Opponents Goal
+        # Pass / Shoot Decision Phase
+        target = (15, 0)  # Opponent's Goal
 
-        if strategyData.active_player_unum == strategyData.robot_model.unum: # I am the active player 
-            drawer.annotation((0,10.5), "Pass Selector Phase" , drawer.Color.yellow, "status")
+        if strategyData.active_player_unum == strategyData.robot_model.unum:  # I am the active player 
+            drawer.annotation((0,10.5), "Pass Selector Phase", drawer.Color.yellow, "status")
         else:
             drawer.clear_player()
 
-        if strategyData.active_player_unum == strategyData.robot_model.unum: # I am the active player 
-            pass_reciever_unum = strategyData.player_unum + 1 # This starts indexing at 1, therefore player 1 wants to pass to player 2
-            if pass_reciever_unum != 6:
-                target = strategyData.teammate_positions[pass_reciever_unum-1] # This is 0 indexed so we actually need to minus 1 
-            else:
-                target = (15,0) 
+        if strategyData.active_player_unum == strategyData.robot_model.unum:  # I am the active player
+            my_pos = np.array(strategyData.mypos)
+            goal_pos = np.array(target)
 
-            drawer.line(strategyData.mypos, target, 2,drawer.Color.red,"pass line")
-            return self.kickTarget(strategyData,strategyData.mypos,target)
+            # Determine if I'm the closest to the goal ---
+            my_distance_to_goal = np.linalg.norm(my_pos - goal_pos)
+            teammate_distances = [
+                np.linalg.norm(np.array(pos) - goal_pos)
+                for pos in strategyData.teammate_positions
+            ]
+            closest_to_goal_unum = np.argmin(teammate_distances) + 1  # +1 since player_unum starts at 1
+
+            # If I'm the closest to the goal, shoot instead of passing
+            if strategyData.player_unum == closest_to_goal_unum:
+                drawer.annotation((0, 9.5), "I'm closest → SHOOT!", drawer.Color.green, "shoot_status")
+                drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "shot line")
+                return self.kickTarget(strategyData, strategyData.mypos, target)
+
+            # --- Otherwise, proceed with normal passing logic ---
+            pass_reciever_unum = strategyData.player_unum + 1
+            if pass_reciever_unum != 6:
+                target = strategyData.teammate_positions[pass_reciever_unum - 1]  # teammates is 0 indexed
+            else:
+                target = (15, 0)
+
+            drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "pass line")
+            return self.kickTarget(strategyData, strategyData.mypos, target)
+
         else:
             drawer.clear("pass line")
             return self.move(strategyData.my_desired_position, orientation=strategyData.ball_dir)
-        
-
-
-
-
-
-
-
-
-
-
-
 
 
 
