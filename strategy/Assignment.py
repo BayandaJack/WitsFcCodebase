@@ -14,25 +14,25 @@ def role_assignment(teammate_positions, formation_positions):
     N = len(teammate_positions)
     M = len(formation_positions)
 
-    # Quick conversion to numpy arrays for vectorized distance calculation if not already
+    # conversion to numpy arrays
     teammates = [np.asarray(p) for p in teammate_positions]
     formations = [np.asarray(p) for p in formation_positions]
 
-    # 1) Build player preference lists (players -> list of role indices sorted by nearest)
+    # Build player preference lists
     player_prefs = []
     for p_idx, p_pos in enumerate(teammates):
-        # compute squared distances to all formation positions
+        # Euclidean distance
         dists = []
         for r_idx, r_pos in enumerate(formations):
             dx = float(r_pos[0]) - float(p_pos[0])
             dy = float(r_pos[1]) - float(p_pos[1])
             sq = dx*dx + dy*dy
             dists.append((sq, r_idx))
-        # sort by distance then by role index as deterministic tie-breaker
+        # sort by distance then role index as tie-breaker
         dists.sort(key=lambda x: (x[0], x[1]))
         player_prefs.append([r for _, r in dists])
 
-    # 2) Build role preference ranking maps (role -> player -> rank)
+    # Build role preference lists
     role_rank = []
     for r_idx, r_pos in enumerate(formations):
         dists = []
@@ -41,13 +41,13 @@ def role_assignment(teammate_positions, formation_positions):
             dy = float(p_pos[1]) - float(r_pos[1])
             sq = dx*dx + dy*dy
             dists.append((sq, p_idx))
-        # sort ascending (best players first)
+        # sort
         dists.sort(key=lambda x: (x[0], x[1]))
-        # create rank map: player_idx -> rank (lower is better)
+        # create rank map: player_idx -> rank
         rank_map = {p: rank for rank, (_, p) in enumerate(dists)}
         role_rank.append(rank_map)
 
-    # 3) Gale-Shapley (players propose)
+    # Gale-Shapley (players propose)
     # current_matches: role_index -> player_index or None
     current_matches = {r: None for r in range(M)}
     # next_proposal pointer for each player: index into player_prefs[p]
@@ -82,7 +82,7 @@ def role_assignment(teammate_positions, formation_positions):
                 if next_proposal[p] < len(player_prefs[p]):
                     unmatched.append(p)
 
-    # 4) Build point_preferences mapping unum (1..N) -> assigned position (ndarray)
+    # Build point_preferences mapping unum (1..N) -> assigned position (ndarray)
     point_preferences = {}
     # invert current_matches to get player -> role
     player_to_role = {p: None for p in range(N)}
@@ -94,7 +94,7 @@ def role_assignment(teammate_positions, formation_positions):
         unum = p + 1
         r = player_to_role[p]
         if r is None:
-            # unmatched player: fallback policy — keep current position (or handle as you prefer)
+            # unmatched player: fallback policy — keep current position
             point_preferences[unum] = np.array(teammates[p])
         else:
             point_preferences[unum] = np.array(formations[r])
