@@ -2,7 +2,15 @@ import numpy as np
 
 def GenerateBasicFormation():
 
+    formation = [
+        np.array([-13, 0]),    # Goalkeeper
+        np.array([-7, -4]),  # Right Defender
+        np.array([-3, 4]),   # Left Defender
+        np.array([2, 0]),    # Forward Left
+        np.array([9, 0])      # Forward Right
+    ]
 
+    """
     formation = [
         np.array([-13, 0]),    # Goalkeeper
         np.array([-7, -2]),  # Left Defender
@@ -10,7 +18,7 @@ def GenerateBasicFormation():
         np.array([7, 1]),    # Forward Left
         np.array([12, 0])      # Forward Right
     ]
-
+    """
 
 
     # formation = [
