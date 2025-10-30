@@ -2,6 +2,7 @@ from agent.Base_Agent import Base_Agent
 from math_ops.Math_Ops import Math_Ops as M
 import math
 import numpy as np
+import time
 
 from strategy.Assignment import role_assignment 
 from strategy.Strategy import Strategy 
@@ -210,69 +211,246 @@ class Agent(Base_Agent):
 
 
 
+
     def select_skill(self, strategyData):
-        #--------------------------------------- 2. Decide action
         drawer = self.world.draw
-        # path_draw_options = self.path_manager.draw_options
 
         #------------------------------------------------------
         # Role Assignment Phase
-        if strategyData.active_player_unum == strategyData.robot_model.unum:  # I am the active player 
-            drawer.annotation((0,10.5), "Role Assignment Phase", drawer.Color.yellow, "status")
-        else:
-            drawer.clear("status")
+        formation_positions = GenerateBasicFormation(step_size=0.1)
+        point_preferences = role_assignment(
+            strategyData.teammate_positions,
+            formation_positions,
+            strategyData.ball_2d
+        )
 
-        formation_positions = GenerateBasicFormation()
-        point_preferences = role_assignment(strategyData.teammate_positions, formation_positions)
         strategyData.my_desired_position = point_preferences[strategyData.player_unum]
-        strategyData.my_desried_orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(strategyData.my_desired_position)
+        strategyData.my_desried_orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(
+            strategyData.my_desired_position
+        )
 
-        drawer.line(strategyData.mypos, strategyData.my_desired_position, 2, drawer.Color.blue, "target line")
-
-        # If formation not yet ready, keep moving into position
-        if not strategyData.IsFormationReady(point_preferences):
-            return self.move(strategyData.my_desired_position, orientation=strategyData.my_desried_orientation)
+        my_pos = np.array(strategyData.mypos, dtype=float)
+        ball_pos = np.array(strategyData.ball_2d, dtype=float)
+        goal_pos = np.array([15.0, 0.0], dtype=float)
+        team_direction = 1  # attacking right
 
         #------------------------------------------------------
-        # Pass / Shoot Decision Phase
-        target = (15, 0)  # Opponent's Goal
+        # Maintain a sticky active player
+        if not hasattr(self, "active_player_unum"):
+            self.active_player_unum = None
 
-        if strategyData.active_player_unum == strategyData.robot_model.unum:  # I am the active player 
-            drawer.annotation((0,10.5), "Pass Selector Phase", drawer.Color.yellow, "status")
+        distances_to_ball = [np.linalg.norm(np.array(pos, dtype=float) - ball_pos)
+                            for pos in strategyData.teammate_positions]
+        closest_to_ball_unum = np.argmin(distances_to_ball) + 1
+        closest_distance = distances_to_ball[closest_to_ball_unum - 1]
+
+        # Sticky logic with improved possession detection
+        if self.active_player_unum is None or closest_distance < 0.5:
+            self.active_player_unum = closest_to_ball_unum
+            self.dribble_counter = 0
         else:
-            drawer.clear_player()
+            active_index = self.active_player_unum - 1
+            if active_index < len(strategyData.teammate_positions):
+                active_pos = np.array(strategyData.teammate_positions[active_index], dtype=float)
+                dist_to_ball = np.linalg.norm(active_pos - ball_pos)
+                if dist_to_ball > 2.0:
+                    self.active_player_unum = closest_to_ball_unum
+                    self.dribble_counter = 0
 
-        if strategyData.active_player_unum == strategyData.robot_model.unum:  # I am the active player
-            my_pos = np.array(strategyData.mypos)
-            goal_pos = np.array(target)
+        strategyData.active_player_unum = self.active_player_unum
 
-            # Determine if I'm the closest to the goal ---
-            my_distance_to_goal = np.linalg.norm(my_pos - goal_pos)
-            teammate_distances = [
-                np.linalg.norm(np.array(pos) - goal_pos)
-                for pos in strategyData.teammate_positions
-            ]
-            closest_to_goal_unum = np.argmin(teammate_distances) + 1  # +1 since player_unum starts at 1
+        #------------------------------------------------------
+        # 🧤 Goalkeeper logic — stays near goal
+        if strategyData.player_unum == 1:  # assuming player 1 is keeper
+            goal_x, goal_y = -15.0, 0.0  # left-side goal
+            distance_to_goal = np.linalg.norm(my_pos - np.array([goal_x, goal_y]))
+            distance_to_ball = np.linalg.norm(my_pos - ball_pos)
 
-            # If I'm the closest to the goal, shoot instead of passing
-            if strategyData.player_unum == closest_to_goal_unum:
-                drawer.annotation((0, 9.5), "I'm closest → SHOOT!", drawer.Color.green, "shoot_status")
-                drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "shot line")
-                return self.kickTarget(strategyData, strategyData.mypos, target)
-
-            # --- Otherwise, proceed with normal passing logic ---
-            pass_reciever_unum = strategyData.player_unum + 1
-            if pass_reciever_unum != 6:
-                target = strategyData.teammate_positions[pass_reciever_unum - 1]  # teammates is 0 indexed
+            # Keep within small area near goal, chase only if close
+            if distance_to_ball < 5.0:
+                return self.move(ball_pos)
+            elif distance_to_goal > 3.0:
+                return self.move(np.array([goal_x, goal_y]))
             else:
-                target = (15, 0)
+                return self.move(my_pos)  # stay idle near goal
 
-            drawer.line(strategyData.mypos, target, 2, drawer.Color.red, "pass line")
-            return self.kickTarget(strategyData, strategyData.mypos, target)
+        #------------------------------------------------------
+        # 🧍 Non-active players: move BESIDE the active player (support)
+        if strategyData.player_unum != self.active_player_unum:
+            active_pos = np.array(strategyData.teammate_positions[self.active_player_unum - 1], dtype=float)
 
-        else:
-            drawer.clear("pass line")
-            return self.move(strategyData.my_desired_position, orientation=strategyData.ball_dir)
+            SUPPORT_RADIUS = 4.0
+            SIDE_OFFSET = 3.0
+
+            # Direction toward goal (team orientation)
+            direction_to_goal = (goal_pos - active_pos)
+            direction_to_goal /= np.linalg.norm(direction_to_goal)
+
+            # Move beside (left/right) relative to the goal direction
+            perp_direction = np.array([-direction_to_goal[1], direction_to_goal[0]])  # 90° rotation
+            side_factor = -1 if (strategyData.player_unum % 2 == 0) else 1  # alternate left/right
+            move_target = active_pos + direction_to_goal * 2.0 + perp_direction * SIDE_OFFSET * side_factor
+
+            # Clamp within pitch
+            move_target[0] = np.clip(move_target[0], -15, 15)
+            move_target[1] = np.clip(move_target[1], -10, 10)
+
+            drawer.annotation(move_target, f"P{strategyData.player_unum}", drawer.Color.cyan, "support")
+            orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(move_target)
+            return self.move(move_target, orientation=orientation)
+
+        #------------------------------------------------------
+        # ⚽ Active player logic
+        drawer.annotation((0, 10.5), f"🏃 Active: Player #{self.active_player_unum}", drawer.Color.yellow, "status")
+
+        my_distance_to_goal = np.linalg.norm(my_pos - goal_pos)
+        DRIBBLE_SPEED = 1.2
+        BALL_CONTROL_DISTANCE = 0.3
+
+        if not hasattr(self, "last_pass_time"):
+            self.last_pass_time = 0
+        PASS_COOLDOWN = 0.6
+        now = time.time()
+        can_pass = (now - self.last_pass_time) >= PASS_COOLDOWN
+
+        if not hasattr(self, "dribble_counter"):
+            self.dribble_counter = 0
+
+        #------------------------------------------------------
+        # 🧠 NEW: Mandatory close-range pass when near keeper
+        CLOSE_RANGE = 7.0
+        KEEPER_ALERT_DISTANCE = 2.0
+        keeper_pos = np.array([-15.0, 0.0])  # assuming opposing keeper defends left goal
+        keeper_to_ball_dist = np.linalg.norm(goal_pos - my_pos)
+
+        if my_distance_to_goal <= CLOSE_RANGE and keeper_to_ball_dist <= KEEPER_ALERT_DISTANCE and can_pass:
+            # find nearest teammate near goal
+            best_teammate = None
+            best_dist = float("inf")
+            for i, pos in enumerate(strategyData.teammate_positions):
+                pos = np.array(pos, dtype=float)
+                if i + 1 == self.active_player_unum or i + 1 == 1:
+                    continue
+                dist_to_goal = np.linalg.norm(pos - goal_pos)
+                dist_to_me = np.linalg.norm(pos - my_pos)
+                if dist_to_goal < my_distance_to_goal and dist_to_me < 6.0:
+                    if dist_to_goal < best_dist:
+                        best_dist = dist_to_goal
+                        best_teammate = (i + 1, pos)
+
+            if best_teammate:
+                drawer.annotation((0, 9.5), f"⚠️ Close-range pass → #{best_teammate[0]}", drawer.Color.cyan, "pass_status")
+                drawer.line(strategyData.mypos, best_teammate[1], 2, drawer.Color.red, "pass_line")
+                self.last_pass_time = now
+                self.dribble_counter = 0
+                return self.kickTarget(strategyData, strategyData.mypos, best_teammate[1])
+
+        #------------------------------------------------------
+        # --- SHOOT if in range
+        SHOOT_RANGE = 5.0
+        if my_distance_to_goal < SHOOT_RANGE:
+            drawer.annotation((0, 9.5), "In range → SHOOT!", drawer.Color.green, "shoot_status")
+            drawer.line(strategyData.mypos, goal_pos, 2, drawer.Color.red, "shot line")
+            self.dribble_counter = 0
+            return self.kickTarget(strategyData, strategyData.mypos, goal_pos)
+
+        #------------------------------------------------------
+        # 🎯 Pass logic: look for teammate closer to goal
+        teammate_positions = strategyData.teammate_positions
+        best_teammate = None
+        best_dist_to_goal = float("inf")
+
+        for i, pos in enumerate(teammate_positions):
+            pos = np.array(pos, dtype=float)
+            if i + 1 != self.active_player_unum and np.linalg.norm(pos - goal_pos) < my_distance_to_goal:
+                dist_to_goal = np.linalg.norm(pos - goal_pos)
+                if dist_to_goal < best_dist_to_goal:
+                    best_dist_to_goal = dist_to_goal
+                    best_teammate = (i + 1, pos)
+
+        # Pass after 2–3 dribbles or if clear forward teammate
+        if best_teammate and can_pass and (self.dribble_counter >= 2 or (my_distance_to_goal - best_dist_to_goal) > 1.0):
+            drawer.annotation((0, 9.5), f"Pass → #{best_teammate[0]}", drawer.Color.cyan, "pass_status")
+            drawer.line(strategyData.mypos, best_teammate[1], 2, drawer.Color.red, "pass line")
+            self.last_pass_time = now
+            self.dribble_counter = 0
+            return self.kickTarget(strategyData, strategyData.mypos, best_teammate[1])
+
+        #------------------------------------------------------
+        # Otherwise, DRIBBLE toward the goal — BUT first approach from behind when necessary
+        dist_to_ball = np.linalg.norm(my_pos - ball_pos)
+
+        # compute vectors
+        to_goal_from_ball = goal_pos - ball_pos
+        dist_goal_from_ball = np.linalg.norm(to_goal_from_ball)
+        unit_goal_from_ball = to_goal_from_ball / dist_goal_from_ball if dist_goal_from_ball > 0 else np.array([1.0, 0.0])
+
+        APPROACH_BACK_DIST = 0.6
+        approach_point = ball_pos - unit_goal_from_ball * APPROACH_BACK_DIST
+
+        vec_my_to_ball = my_pos - ball_pos
+        proj = np.dot(vec_my_to_ball, unit_goal_from_ball)
+        in_front_of_ball = proj > 0.15
+
+        if not hasattr(self, "possession_lock"):
+            self.possession_lock = 0
+
+        if dist_to_ball <= BALL_CONTROL_DISTANCE:
+            self.possession_lock = time.time() + 0.8
+
+        if in_front_of_ball and dist_to_ball > BALL_CONTROL_DISTANCE:
+            dribble_target = approach_point
+            orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(ball_pos)
+            drawer.annotation(approach_point, "approach", drawer.Color.yellow, "approach")
+            drawer.line(my_pos, approach_point, 1, drawer.Color.yellow, "approach_line")
+            return self.move(dribble_target, orientation=orientation)
+
+        if time.time() < self.possession_lock:
+            dribble_target = ball_pos + unit_goal_from_ball * 0.4
+            direction_to_ball = ball_pos - my_pos
+            if np.linalg.norm(direction_to_ball) > 0:
+                direction_to_ball /= np.linalg.norm(direction_to_ball)
+            blended_dir = 0.75 * unit_goal_from_ball + 0.25 * direction_to_ball
+            orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(my_pos + blended_dir)
+            self.dribble_counter += 1
+            drawer.annotation((0, 9.5), f"⚽ Possession lock dribble ({self.dribble_counter})", drawer.Color.orange, "dribble_status")
+            drawer.line(strategyData.mypos, dribble_target, 2, drawer.Color.green, "dribble_line")
+            return self.move(dribble_target, orientation=orientation)
+
+        if dist_to_ball > BALL_CONTROL_DISTANCE:
+            dribble_target = ball_pos
+            orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(ball_pos)
+            self.dribble_counter += 1
+            drawer.annotation((0, 9.5), f"⚽ Chasing ({self.dribble_counter})", drawer.Color.orange, "chase_status")
+            drawer.line(strategyData.mypos, dribble_target, 2, drawer.Color.green, "chase_line")
+            return self.move(dribble_target, orientation=orientation)
+
+        direction_to_goal = unit_goal_from_ball
+        dribble_target = my_pos + direction_to_goal * DRIBBLE_SPEED
+        direction_to_ball = ball_pos - my_pos
+        if np.linalg.norm(direction_to_ball) > 0:
+            direction_to_ball /= np.linalg.norm(direction_to_ball)
+        blended_dir = 0.7 * direction_to_goal + 0.3 * direction_to_ball
+        orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(my_pos + blended_dir)
+
+        self.dribble_counter += 1
+        drawer.annotation((0, 9.5), f"⚽ Dribbling ({self.dribble_counter})", drawer.Color.orange, "dribble_status")
+        drawer.line(strategyData.mypos, dribble_target, 2, drawer.Color.green, "dribble_line")
+
+        return self.move(dribble_target, orientation=orientation)
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

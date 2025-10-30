@@ -1,38 +1,44 @@
 import numpy as np
 
-def GenerateBasicFormation():
+# Global variable to track forward movement
+formation_increment = 0.0  # How much the formation has moved forward
 
-    formation = [
-        np.array([-13, 0]),    # Goalkeeper
-        np.array([-7, -4]),  # Right Defender
-        np.array([-3, 4]),   # Left Defender
-        np.array([2, 0]),    # Forward Left
-        np.array([9, 0])      # Forward Right
-    ]
+def GenerateBasicFormation(step_size=0.1):
 
-    """
-    formation = [
+    base_formation = [
         np.array([-13, 0]),    # Goalkeeper
-        np.array([-7, -2]),  # Left Defender
-        np.array([-0, 3]),   # Right Defender
-        np.array([7, 1]),    # Forward Left
-        np.array([12, 0])      # Forward Right
+        np.array([-9, 0]),    # Right Defender
+        np.array([3, -4]),     # Left Defender
+        np.array([3, 4]),      # Forward Left
+        np.array([9, 0])       # Forward Right
     ]
     """
+    Generates the formation with a small forward x-axis increment each tick.
+    step_size: how much to move forward each tick
+    
+    global formation_increment
+    formation_increment += step_size  # increment for this tick
 
+    # Base formation (your current hardcoded setup)
+    base_formation = [
+        np.array([-13, 0]),    # Goalkeeper
+        np.array([-9, 0]),    # Right Defender
+        np.array([3, -4]),     # Left Defender
+        np.array([3, 4]),      # Forward Left
+        np.array([9, 0])       # Forward Right
+    ]
 
-    # formation = [
-    #     np.array([-13, 0]),    # Goalkeeper
-    #     np.array([-10, -2]),  # Left Defender
-    #     np.array([-11, 3]),   # Center Back Left
-    #     np.array([-8, 0]),    # Center Back Right
-    #     np.array([-3, 0]),   # Right Defender
-    #     np.array([0, 1]),    # Left Midfielder
-    #     np.array([2, 0]),    # Center Midfielder Left
-    #     np.array([3, 3]),     # Center Midfielder Right
-    #     np.array([8, 0]),     # Right Midfielder
-    #     np.array([9, 1]),    # Forward Left
-    #     np.array([12, 0])      # Forward Right
-    # ]
+    # Move everyone except goalkeeper forward along x-axis
+    dynamic_formation = []
+    for i, pos in enumerate(base_formation):
+        if i == 0:
+            # Keep goalkeeper fixed
+            dynamic_formation.append(pos.copy())
+        else:
+            new_pos = pos.copy()
+            new_pos[0] += formation_increment
+            dynamic_formation.append(new_pos)
 
-    return formation
+    return dynamic_formation
+    """
+    return base_formation
