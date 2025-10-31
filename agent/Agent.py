@@ -207,10 +207,6 @@ class Agent(Base_Agent):
 
 
 
-        
-
-
-
 
     def select_skill(self, strategyData):
         drawer = self.world.draw
@@ -305,7 +301,7 @@ class Agent(Base_Agent):
 
         my_distance_to_goal = np.linalg.norm(my_pos - goal_pos)
         DRIBBLE_SPEED = 1.2
-        BALL_CONTROL_DISTANCE = 0.3
+        BALL_CONTROL_DISTANCE = 0.15
 
         if not hasattr(self, "last_pass_time"):
             self.last_pass_time = 0
@@ -318,8 +314,8 @@ class Agent(Base_Agent):
 
         #------------------------------------------------------
         # 🧠 NEW: Mandatory close-range pass when near keeper
-        CLOSE_RANGE = 7.0
-        KEEPER_ALERT_DISTANCE = 2.0
+        CLOSE_RANGE = 10.0
+        KEEPER_ALERT_DISTANCE = 5.0
         keeper_pos = np.array([-15.0, 0.0])  # assuming opposing keeper defends left goal
         keeper_to_ball_dist = np.linalg.norm(goal_pos - my_pos)
 
@@ -347,7 +343,7 @@ class Agent(Base_Agent):
 
         #------------------------------------------------------
         # --- SHOOT if in range
-        SHOOT_RANGE = 5.0
+        SHOOT_RANGE = 3.0
         if my_distance_to_goal < SHOOT_RANGE:
             drawer.annotation((0, 9.5), "In range → SHOOT!", drawer.Color.green, "shoot_status")
             drawer.line(strategyData.mypos, goal_pos, 2, drawer.Color.red, "shot line")
