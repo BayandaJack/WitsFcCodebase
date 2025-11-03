@@ -228,6 +228,7 @@ class Agent(Base_Agent):
         my_pos = np.array(strategyData.mypos, dtype=float)
         ball_pos = np.array(strategyData.ball_2d, dtype=float)
         goal_pos = np.array([15.0, 0.0], dtype=float)
+        our_goal_pos = np.array([-15.0, 0.0], dtype=float)  # Our goal (left side)
         team_direction = 1  # attacking right
 
         #------------------------------------------------------
@@ -271,36 +272,47 @@ class Agent(Base_Agent):
                 return self.move(my_pos)  # stay idle near goal
 
         #------------------------------------------------------
-        # 🧍 Non-active players: move BESIDE the active player (support)
+        # 🧍 Non-active players: move BEHIND the active player (3-4m support)
         if strategyData.player_unum != self.active_player_unum:
             active_pos = np.array(strategyData.teammate_positions[self.active_player_unum - 1], dtype=float)
-
-            SUPPORT_RADIUS = 4.0
-            SIDE_OFFSET = 3.0
-
-            # Direction toward goal (team orientation)
-            direction_to_goal = (goal_pos - active_pos)
-            direction_to_goal /= np.linalg.norm(direction_to_goal)
-
-            # Move beside (left/right) relative to the goal direction
-            perp_direction = np.array([-direction_to_goal[1], direction_to_goal[0]])  # 90° rotation
-            side_factor = -1 if (strategyData.player_unum % 2 == 0) else 1  # alternate left/right
-            move_target = active_pos + direction_to_goal * 2.0 + perp_direction * SIDE_OFFSET * side_factor
+            
+            # NEW: Calculate support position 3-4m BEHIND the active player
+            ball_to_active = active_pos - ball_pos
+            ball_to_active_norm = np.linalg.norm(ball_to_active)
+            
+            if ball_to_active_norm > 0:
+                # Direction from ball to active player
+                ball_to_active_dir = ball_to_active / ball_to_active_norm
+                
+                # Support position is 3-4m behind active player (towards our goal)
+                SUPPORT_DISTANCE = 3.5  # meters behind
+                support_pos = active_pos - ball_to_active_dir * SUPPORT_DISTANCE
+                
+                # Add some lateral offset to avoid stacking
+                perp_offset = np.array([-ball_to_active_dir[1], ball_to_active_dir[0]]) * 1.5
+                # Alternate left/right based on player number
+                if strategyData.player_unum % 2 == 0:
+                    support_pos += perp_offset
+                else:
+                    support_pos -= perp_offset
+            else:
+                # Fallback: use formation position
+                support_pos = np.array(strategyData.my_desired_position, dtype=float)
 
             # Clamp within pitch
-            move_target[0] = np.clip(move_target[0], -15, 15)
-            move_target[1] = np.clip(move_target[1], -10, 10)
+            support_pos[0] = np.clip(support_pos[0], -15, 15)
+            support_pos[1] = np.clip(support_pos[1], -10, 10)
 
-            drawer.annotation(move_target, f"P{strategyData.player_unum}", drawer.Color.cyan, "support")
-            orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(move_target)
-            return self.move(move_target, orientation=orientation)
+            drawer.annotation(support_pos, f"P{strategyData.player_unum}", drawer.Color.cyan, "support")
+            orientation = strategyData.GetDirectionRelativeToMyPositionAndTarget(ball_pos)  # Face the ball
+            return self.move(support_pos, orientation=orientation)
 
         #------------------------------------------------------
         # ⚽ Active player logic
         drawer.annotation((0, 10.5), f"🏃 Active: Player #{self.active_player_unum}", drawer.Color.yellow, "status")
 
         my_distance_to_goal = np.linalg.norm(my_pos - goal_pos)
-        DRIBBLE_SPEED = 1.2
+        DRIBBLE_SPEED = 2.0
         BALL_CONTROL_DISTANCE = 0.15
 
         if not hasattr(self, "last_pass_time"):
@@ -313,7 +325,83 @@ class Agent(Base_Agent):
             self.dribble_counter = 0
 
         #------------------------------------------------------
-        # 🧠 NEW: Mandatory close-range pass when near keeper
+        # 🆕 CRITICAL: Check if facing wrong direction and pass back
+        def is_facing_wrong_direction(my_pos, ball_pos, our_goal_pos):
+            """Check if player is facing towards our own goal (bad direction)"""
+            # Vector from player to ball
+            player_to_ball = ball_pos - my_pos
+            
+            # Vector from player to our goal
+            player_to_our_goal = our_goal_pos - my_pos
+            
+            # Normalize vectors
+            if np.linalg.norm(player_to_ball) > 0:
+                player_to_ball = player_to_ball / np.linalg.norm(player_to_ball)
+            if np.linalg.norm(player_to_our_goal) > 0:
+                player_to_our_goal = player_to_our_goal / np.linalg.norm(player_to_our_goal)
+            
+            # Calculate dot product - if positive, we're facing towards our goal
+            dot_product = np.dot(player_to_ball, player_to_our_goal)
+            
+            # If dot product > 0.7, we're facing significantly towards our goal
+            return dot_product > 0.7
+
+        def find_backward_pass_target(strategyData, my_pos, ball_pos):
+            """Find best teammate for backward pass (behind the active player)"""
+            best_teammate = None
+            best_score = -float('inf')
+            
+            ball_to_me = my_pos - ball_pos
+            if np.linalg.norm(ball_to_me) > 0:
+                ball_to_me_dir = ball_to_me / np.linalg.norm(ball_to_me)
+            else:
+                ball_to_me_dir = np.array([1.0, 0.0])
+            
+            for i, teammate_pos in enumerate(strategyData.teammate_positions):
+                teammate_pos = np.array(teammate_pos, dtype=float)
+                teammate_unum = i + 1
+                
+                # Skip self and goalkeeper
+                if teammate_unum == strategyData.player_unum or teammate_unum == 1:
+                    continue
+                
+                # Vector from ball to teammate
+                ball_to_teammate = teammate_pos - ball_pos
+                
+                # Check if teammate is behind me (relative to ball direction)
+                if np.linalg.norm(ball_to_teammate) > 0:
+                    ball_to_teammate_dir = ball_to_teammate / np.linalg.norm(ball_to_teammate)
+                    behind_factor = np.dot(ball_to_me_dir, ball_to_teammate_dir)
+                    
+                    # Distance factors
+                    dist_to_me = np.linalg.norm(teammate_pos - my_pos)
+                    dist_score = 1.0 / (dist_to_me + 0.1)  # Prefer closer teammates
+                    
+                    # Angle score (how directly behind they are)
+                    angle_score = max(0, behind_factor)
+                    
+                    # Total score
+                    score = angle_score * 2.0 + dist_score
+                    
+                    if score > best_score and dist_to_me < 8.0:  # Reasonable pass distance
+                        best_score = score
+                        best_teammate = (teammate_unum, teammate_pos)
+            
+            return best_teammate
+
+        # Check if we're facing wrong direction and should pass back
+        facing_wrong_way = is_facing_wrong_direction(my_pos, ball_pos, our_goal_pos)
+        if facing_wrong_way and can_pass:
+            backward_target = find_backward_pass_target(strategyData, my_pos, ball_pos)
+            if backward_target:
+                drawer.annotation((0, 9.0), "🔄 FACING WRONG WAY → PASS BACK!", drawer.Color.red, "wrong_way_status")
+                drawer.line(strategyData.mypos, backward_target[1], 2, drawer.Color.red, "backward_pass_line")
+                self.last_pass_time = now
+                self.dribble_counter = 0
+                return self.kickTarget(strategyData, strategyData.mypos, backward_target[1])
+
+        #------------------------------------------------------
+        # 🧠 Mandatory close-range pass when near keeper
         CLOSE_RANGE = 10.0
         KEEPER_ALERT_DISTANCE = 5.0
         keeper_pos = np.array([-15.0, 0.0])  # assuming opposing keeper defends left goal
@@ -343,7 +431,7 @@ class Agent(Base_Agent):
 
         #------------------------------------------------------
         # --- SHOOT if in range
-        SHOOT_RANGE = 3.0
+        SHOOT_RANGE = 4.5
         if my_distance_to_goal < SHOOT_RANGE:
             drawer.annotation((0, 9.5), "In range → SHOOT!", drawer.Color.green, "shoot_status")
             drawer.line(strategyData.mypos, goal_pos, 2, drawer.Color.red, "shot line")
@@ -367,7 +455,7 @@ class Agent(Base_Agent):
         # Pass after 2–3 dribbles or if clear forward teammate
         if best_teammate and can_pass and (self.dribble_counter >= 2 or (my_distance_to_goal - best_dist_to_goal) > 1.0):
             drawer.annotation((0, 9.5), f"Pass → #{best_teammate[0]}", drawer.Color.cyan, "pass_status")
-            drawer.line(strategyData.mypos, best_teammate[1], 2, drawer.Color.red, "pass line")
+            drawer.line(strategyData.mypos, best_teammate[1], 2, drawer.Color.red, "pass_line")
             self.last_pass_time = now
             self.dribble_counter = 0
             return self.kickTarget(strategyData, strategyData.mypos, best_teammate[1])
@@ -434,36 +522,6 @@ class Agent(Base_Agent):
         drawer.line(strategyData.mypos, dribble_target, 2, drawer.Color.green, "dribble_line")
 
         return self.move(dribble_target, orientation=orientation)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
